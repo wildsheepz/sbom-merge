@@ -1,4 +1,4 @@
-name: SBOM Merge
+name: Multistage SBOM Merge
 description: Merge package information from docker build stage into the final sbom
 inputs:
   docker-image:
