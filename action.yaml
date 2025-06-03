@@ -1,0 +1,46 @@
+name: SBOM Merge
+description: Merge package information from docker build stage into the final sbom
+inputs:
+  docker-image:
+    description: The docker image to scan
+    required: true
+  arch:
+    description: Target arch if the image is an multi-arch image
+    required: false
+    default: linux/amd64
+  sbom-output-filepath:
+    description: Filepath to write the merged sbom output to
+    required: false
+    default: .sbom-output.json
+  sbom-raw-filepath:
+    description: Filepath to write the raw sbom output to
+    required: false
+    default: .sbom-raw.json
+
+outputs:
+  sbom-found:
+    description: sbom was found with the image. 'true' if found.
+    value: ${{steps.run.outputs.sbom-found || 'false' }}
+  is-supported-format:
+    description: if the sbom was a supported type. 'true' if supported.
+    value: ${{steps.run.outputs.is-supported-format || 'false' }}
+  sbom-raw-filepath:
+    description: Filepath the raw sbom output was written to
+    value: ${{inputs.sbom-raw-filepath}}
+  sbom-output-filepath:
+    description: Filepath the merged sbom was written to
+    value: ${{inputs.sbom-output-filepath}}
+
+runs:
+  using: composite
+  steps:
+    - name: Extract and Merge SBOM
+      id: run
+      shell: bash
+      run: |
+        OUTPUT_PATH=`realpath ${{inputs.sbom-output-filepath}}`
+        OUTPUT_RAW_PATH=`realpath ${{inputs.sbom-raw-filepath}}`
+        (
+          cd ${{github.action_path}} && \
+          (set -x;python3 merge.py --image ${{inputs.docker-image}} --arch ${{inputs.arch}} --output $OUTPUT_PATH --output-raw $OUTPUT_RAW_PATH)
+        )

@@ -1,0 +1,109 @@
+name: Test - SBOM Merge
+on:
+  workflow_dispatch:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+    paths:
+      - action.yaml
+      - merge.py
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  image-tag: localhost:5000/sbom-test:latest
+
+jobs:
+  test-sbom-merge:
+    services:
+      registry:
+        image: mirror.gcr.io/library/registry:2
+        ports:
+          - "5000:5000"
+      
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        id: buildx
+        with:
+          driver: docker-container
+          driver-opts: |
+            image=mirror.gcr.io/moby/buildkit:buildx-stable-1
+            network=host
+
+      - name: Docker build
+        id: docker_build
+        uses: docker/build-push-action@v5
+        with: 
+          context: ./test
+          file: ./test/Dockerfile
+          push: true
+          attests: |
+            type=sbom,generator=mirror.gcr.io/docker/buildkit-syft-scanner:stable-1
+          provenance: mode=max
+          network: host
+          tags: |
+            ${{env.image-tag}}
+
+
+      - uses: ./
+        id: sbom-merge
+        with:
+          docker-image: ${{env.image-tag}}
+          sbom-output-filepath: sbom-output.json  # optional, default .sbom-output.json
+          sbom-raw-filepath: sbom-raw.json        # optional, default .sbom-raw.json
+          arch: linux/amd64                       # optional, default linux/amd64
+
+      - run: |-
+          echo ${{steps.sbom-merge.outputs.sbom-found}}
+          echo ${{steps.sbom-merge.outputs.is-supported-format}}
+          echo ${{steps.sbom-merge.outputs.sbom-raw-filepath}}
+          echo ${{steps.sbom-merge.outputs.sbom-output-filepath}}
+
+      - run: |-
+          head -n 5 < ${{steps.sbom-merge.outputs.sbom-output-filepath}}
+
+      - run: |-
+          head -n 5 < ${{steps.sbom-merge.outputs.sbom-raw-filepath}}
+
+      - name: install grype
+        run: |-
+          (
+            cd /tmp
+            wget https://github.com/anchore/grype/releases/download/v0.92.2/grype_0.92.2_linux_amd64.deb
+            sudo dpkg -i grype_0.92.2_linux_amd64.deb
+          )
+
+      - name: Run Grype on Merged SBOM
+        run: |-
+          grype sbom:${{steps.sbom-merge.outputs.sbom-output-filepath}}
+
+      - name: Run Grype on Default SBOM
+        run: |-
+          docker buildx imagetools inspect ${{env.image-tag}} --format '{{ json .SBOM.SPDX }}' > default-sbom.json
+          grype sbom:default-sbom.json
+
+
+      - name: Show Inputs
+        if: failure()
+        shell: bash
+        run: |-
+          printf '${{ toJson(inputs) }}'
+
+      - name: Show Github Context
+        if: failure()
+        shell: bash
+        run: |-
+          printf '${{ toJson(github) }}'
+
+      - if: failure()
+        run: |-
+          find . -ls
